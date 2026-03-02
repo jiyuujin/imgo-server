@@ -1,9 +1,60 @@
 use actix_cors::Cors;
 use actix_multipart::Multipart;
-use actix_web::{post, App, HttpServer, HttpResponse, Responder};
-use futures_util::{StreamExt, TryStreamExt};
-use image::{DynamicImage, ImageFormat, ImageOutputFormat};
+use actix_web::{post, App, HttpServer, HttpResponse, Responder, web};
+use futures_util::TryStreamExt;
+use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use std::io::Cursor;
+
+use ab_glyph::{FontArc, PxScale};
+use imageproc::drawing::draw_text_mut;
+use serde::Deserialize;
+
+struct FontState {
+    regular: FontArc,
+    bold: FontArc,
+    base_image: ImageBuffer<Rgba<u8>, Vec<u8>>,
+}
+
+fn draw_wrapped_text(
+    canvas: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: &FontArc,
+    text: &str,
+    x: i32,
+    y: i32,
+    scale: PxScale,
+    color: Rgba<u8>,
+    max_width: u32,
+    line_height: i32,
+) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0.0f32;
+
+    for ch in text.chars() {
+        let ch_width = if (ch as u32) > 0x7F { scale.x } else { scale.x * 0.55 };
+        if current_width + ch_width > max_width as f32 {
+            lines.push(current_line.clone());
+            current_line = ch.to_string();
+            current_width = ch_width;
+        } else {
+            current_line.push(ch);
+            current_width += ch_width;
+        }
+    }
+    if !current_line.is_empty() { lines.push(current_line); }
+
+    for (i, line) in lines.iter().enumerate() {
+        imageproc::drawing::draw_text_mut(
+            canvas,
+            color,
+            x,
+            y + (i as i32 * line_height),
+            scale,
+            font,
+            line,
+        );
+    }
+}
 
 #[post("/compress")]
 async fn compress_handler(mut payload: Multipart) -> impl Responder {
@@ -92,12 +143,75 @@ async fn compress_webp_handler(mut payload: Multipart) -> impl Responder {
         .body(buffer.into_inner())
 }
 
+#[derive(Deserialize)]
+pub struct OgpQuery {
+    title: Option<String>,
+    subtitle: Option<String>,
+}
+
+#[actix_web::get("/ogp")]
+async fn ogp_get_handler(
+    query: web::Query<OgpQuery>,
+    state: web::Data<FontState>,
+) -> impl Responder {
+    let title = query.title.clone().unwrap_or_default();
+    let subtitle = query.subtitle.clone().unwrap_or_default();
+
+    let mut canvas = state.base_image.clone();
+
+    if !title.is_empty() {
+        draw_wrapped_text(&mut canvas, &state.bold, &title, 60, 210, PxScale::from(64.0), Rgba([26, 26, 26, 255]), 1080, 76);
+    }
+    if !subtitle.is_empty() {
+        draw_wrapped_text(&mut canvas, &state.regular, &subtitle, 60, 355, PxScale::from(36.0), Rgba([117, 117, 117, 255]), 1080, 44);
+    }
+
+    let mut buffer = Cursor::new(Vec::new());
+    if DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut buffer, ImageFormat::Jpeg)
+        .is_err()
+    {
+        return HttpResponse::InternalServerError().body("Encode error");
+    }
+
+    HttpResponse::Ok()
+        .content_type("image/jpeg")
+        .body(buffer.into_inner())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+let regular_path = std::env::var("FONT_REGULAR_PATH")
+        .unwrap_or_else(|_| "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string());
+    let bold_path = std::env::var("FONT_BOLD_PATH")
+        .unwrap_or_else(|_| "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc".to_string());
+
+    let font_regular = FontArc::try_from_vec(std::fs::read(&regular_path).expect("Regular font not found"))
+        .expect("Failed to parse regular font");
+    let font_bold = FontArc::try_from_vec(std::fs::read(&bold_path).expect("Bold font not found"))
+        .expect("Failed to parse bold font");
+
+    // ToDo: 画像を選択できるようにする
+    let base_url = "https://tracc.jp/og/sub-base.png";
+    let image_data = reqwest::blocking::get(base_url)
+        .expect("Failed to download base image")
+        .bytes()
+        .expect("Failed to get image bytes");
+    
+    let base_img = image::load_from_memory(&image_data)
+        .expect("Failed to decode base image")
+        .to_rgba8();
+
+    let font_state = web::Data::new(FontState {
+        regular: font_regular,
+        bold: font_bold,
+        base_image: base_img,
+    });
+
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let port: u16 = port.parse().expect("PORT must be a number");
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin() // 利用環境に応じて設定する必要あり
             .allow_any_method()
@@ -105,8 +219,11 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            .app_data(font_state.clone())
+            .route("/", web::get().to(|| async { HttpResponse::Ok().body("OGP Generator is Running!") }))
             .service(compress_handler)
             .service(compress_webp_handler)
+            .service(ogp_get_handler)
     })
     .bind(("0.0.0.0", port))? // Cloud Run 対応
     .run()
