@@ -159,6 +159,23 @@ async fn ogp_get_handler(
 
     let mut canvas = state.base_image.clone();
 
+    // let mut canvas = ImageBuffer::from_pixel(
+    //     1200, 630,
+    //     Rgba([255, 255, 255, 255]),
+    // );
+
+    // for y in 380..630u32 {
+    //     for x in 0..1200u32 {
+    //         let ratio = (y - 380) as f32 / 250.0;
+    //         let alpha = (ratio * 200.0) as u32;
+    //         let pixel = canvas.get_pixel_mut(x, y);
+    //         pixel[0] = (pixel[0] as u32 * (255 - alpha) / 255) as u8;
+    //         pixel[1] = (pixel[1] as u32 * (255 - alpha) / 255) as u8;
+    //         pixel[2] = (pixel[2] as u32 * (255 - alpha) / 255) as u8;
+    //         pixel[3] = 255;
+    //     }
+    // }
+
     if !title.is_empty() {
         draw_wrapped_text(&mut canvas, &state.bold, &title, 60, 210, PxScale::from(64.0), Rgba([26, 26, 26, 255]), 1080, 76);
     }
@@ -178,6 +195,105 @@ async fn ogp_get_handler(
         .content_type("image/jpeg")
         .body(buffer.into_inner())
 }
+
+// #[post("/ogp")]
+// async fn ogp_handler(
+//     mut payload: Multipart,
+//     state: web::Data<FontState>,
+// ) -> impl Responder {
+//     let mut image_bytes: Vec<u8> = Vec::new();
+//     let mut title = String::new();
+//     let mut subtitle = String::new();
+
+//     while let Ok(Some(mut field)) = payload.try_next().await {
+//         let field_name = field
+//             .content_disposition()
+//             .get_name()
+//             .unwrap_or("")
+//             .to_string();
+
+//         let mut data = Vec::new();
+//         while let Ok(Some(chunk)) = field.try_next().await {
+//             data.extend_from_slice(&chunk);
+//         }
+
+//         match field_name.as_str() {
+//             "image"    => image_bytes = data,
+//             "title"    => title    = String::from_utf8_lossy(&data).to_string(),
+//             "subtitle" => subtitle = String::from_utf8_lossy(&data).to_string(),
+//             _ => {}
+//         }
+//     }
+
+//     let base_img = if !image_bytes.is_empty() {
+//         match image::load_from_memory(&image_bytes) {
+//             Ok(img) => img,
+//             Err(_)  => return HttpResponse::BadRequest().body("Base image decode error"),
+//         }
+//     } else {
+//         DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
+//             1200, 630,
+//             Rgba([255, 255, 255, 255]),
+//         ))
+//     };
+
+//     let base_img = base_img.resize_to_fill(
+//         1200, 630,
+//         FilterType::Lanczos3,
+//     );
+
+//     let mut canvas = base_img.to_rgba8();
+
+//     for y in 380..630u32 {
+//         for x in 0..1200u32 {
+//             let alpha_factor = (y - 380) as f32 / 250.0;
+//             let alpha = (alpha_factor * 200.0) as u32;
+            
+//             let pixel = canvas.get_pixel_mut(x, y);
+
+//             pixel[0] = (pixel[0] as u32 * (255 - alpha) / 255) as u8;
+//             pixel[1] = (pixel[1] as u32 * (255 - alpha) / 255) as u8;
+//             pixel[2] = (pixel[2] as u32 * (255 - alpha) / 255) as u8;
+//             pixel[3] = 255; // アルファは固定
+//         }
+//     }
+
+//     if !title.is_empty() {
+//         draw_wrapped_text(
+//             &mut canvas,
+//             &state.bold,
+//             &title,
+//             60, 430,
+//             PxScale::from(64.0),
+//             Rgba([255, 255, 255, 255]), // ここが Rgba<u8> であることを確認
+//             1080, 76,
+//         );
+//     }
+
+//     if !subtitle.is_empty() {
+//         draw_wrapped_text(
+//             &mut canvas,
+//             &state.regular,
+//             &subtitle,
+//             60, 545,
+//             PxScale::from(36.0),
+//             Rgba([220, 220, 220, 255]),
+//             1080, 44,
+//         );
+//     }
+
+//     let mut buffer = Cursor::new(Vec::new());
+//     if DynamicImage::ImageRgba8(canvas)
+//         .write_to(&mut buffer, ImageFormat::Jpeg)
+//         .is_err()
+//     {
+//         return HttpResponse::InternalServerError().body("Encode error");
+//     }
+
+//     HttpResponse::Ok()
+//         .content_type("image/jpeg")
+//         .body(buffer.into_inner())
+// }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -223,6 +339,7 @@ let regular_path = std::env::var("FONT_REGULAR_PATH")
             .route("/", web::get().to(|| async { HttpResponse::Ok().body("OGP Generator is Running!") }))
             .service(compress_handler)
             .service(compress_webp_handler)
+            // .service(ogp_handler)
             .service(ogp_get_handler)
     })
     .bind(("0.0.0.0", port))? // Cloud Run 対応
