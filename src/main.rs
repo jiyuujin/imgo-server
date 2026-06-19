@@ -92,7 +92,9 @@ async fn compress_handler(mut payload: Multipart) -> impl Responder {
     }
 
     // 4. リサイズ (短辺 1024px)
-    let scaled = img.thumbnail(1024, 1024);
+    // let scaled = img.thumbnail(1024, 1024);
+    // 意図的にリサイズしない
+    let scaled = img;
 
     // 5. JPG エンコード
     let mut buffer = Cursor::new(Vec::new());
@@ -128,7 +130,9 @@ async fn compress_webp_handler(mut payload: Multipart) -> impl Responder {
     };
 
     // 3. リサイズ処理 (共通)
-    let scaled = img.thumbnail(1024, 1024);
+    // let scaled = img.thumbnail(1024, 1024);
+    // 意図的にリサイズしない
+    let scaled = img;
 
     // 4. WebP エンコード
     let mut buffer = Cursor::new(Vec::new());
