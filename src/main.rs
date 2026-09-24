@@ -312,7 +312,7 @@ let regular_path = std::env::var("FONT_REGULAR_PATH")
         .expect("Failed to parse bold font");
 
     // ToDo: 画像を選択できるようにする
-    let base_url = "https://tracc.jp/og/sub-base.png";
+    let base_url = "https://admin.tracc.jp/og/sub-base.png";
     let image_data = reqwest::blocking::get(base_url)
         .expect("Failed to download base image")
         .bytes()
