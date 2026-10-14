@@ -15,6 +15,30 @@ struct FontState {
     base_image: ImageBuffer<Rgba<u8>, Vec<u8>>,
 }
 
+fn decode_raw(bytes: &[u8]) -> Option<DynamicImage> {
+    // NEF は TIFF コンテナ (II*\0 or MM\0*)
+    if !(bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*")) {
+        return None;
+    }
+    let raw = rawloader::decode(&mut Cursor::new(bytes)).ok()?;
+    let mut pipeline =
+        imagepipe::Pipeline::new_from_source(imagepipe::ImageSource::Raw(raw)).ok()?;
+    let decoded = pipeline.output_8bit(None).ok()?;
+    let buf = image::RgbImage::from_raw(
+        decoded.width as u32,
+        decoded.height as u32,
+        decoded.data,
+    )?;
+    Some(DynamicImage::ImageRgb8(buf))
+}
+
+fn decode_image(bytes: &[u8]) -> Result<DynamicImage, image::ImageError> {
+    if let Some(img) = decode_raw(bytes) {
+        return Ok(img);
+    }
+    image::load_from_memory(bytes)
+}
+
 fn draw_wrapped_text(
     canvas: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
     font: &FontArc,
@@ -72,7 +96,7 @@ async fn compress_handler(mut payload: Multipart) -> impl Responder {
     }
 
     // 2. 画像デコード (PNG or JPG or TIFF などを自動で判別)
-    let Ok(mut img) = image::load_from_memory(&image_bytes) else {
+    let Ok(mut img) = decode_image(&image_bytes) else {
         return HttpResponse::BadRequest().body("Decode error");
     };
 
@@ -125,7 +149,7 @@ async fn compress_webp_handler(mut payload: Multipart) -> impl Responder {
     }
 
     // 2. 画像デコード (PNG or JPG or TIFF などを自動で判別)
-    let Ok(img) = image::load_from_memory(&image_bytes) else {
+    let Ok(img) = decode_image(&image_bytes) else {
         return HttpResponse::BadRequest().body("Decode error");
     };
 
@@ -346,7 +370,7 @@ let regular_path = std::env::var("FONT_REGULAR_PATH")
             // .service(ogp_handler)
             .service(ogp_get_handler)
     })
-    .bind(("0.0.0.0", port))? // Cloud Run 対応
+    .bind_auto_h2c(("0.0.0.0", port))? // Cloud Run 対応
     .run()
     .await
 }
