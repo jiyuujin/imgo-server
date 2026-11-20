@@ -25,15 +25,20 @@ COPY . .
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libfontconfig1-dev \
+    libheif-dev \
+    clang \
+    libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     fonts-noto-cjk \
+    libheif1 \
+    libheif-plugin-libde265 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/imgo-server /usr/local/bin/app
