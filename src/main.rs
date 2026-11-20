@@ -9,6 +9,8 @@ use ab_glyph::{FontArc, PxScale};
 use imageproc::drawing::draw_text_mut;
 use serde::Deserialize;
 
+use exif;
+
 struct FontState {
     regular: FontArc,
     bold: FontArc,
@@ -37,6 +39,49 @@ fn decode_image(bytes: &[u8]) -> Result<DynamicImage, image::ImageError> {
         return Ok(img);
     }
     image::load_from_memory(bytes)
+}
+
+fn extract_exif(image_bytes: &[u8]) -> Option<Vec<u8>> {
+    // JPEG の場合 (SOIマーカー 0xFF 0xD8)
+    if image_bytes.len() >= 4 && image_bytes[0] == 0xFF && image_bytes[1] == 0xD8 {
+        let mut idx = 2;
+        while idx + 4 < image_bytes.len() {
+            if image_bytes[idx] != 0xFF {
+                break;
+            }
+            let marker = image_bytes[idx + 1];
+            if marker == 0xDA { // SOS
+                break;
+            }
+            let length = u16::from_be_bytes([image_bytes[idx + 2], image_bytes[idx + 3]]) as usize;
+            if marker == 0xE1 { // APP1 (Exif)
+                let payload_start = idx + 4;
+                let payload_end = idx + 2 + length;
+                if payload_end <= image_bytes.len() {
+                    if payload_end - payload_start >= 6 {
+                        let header = &image_bytes[payload_start..payload_start + 6];
+                        if header == b"Exif\0\0" {
+                            return Some(image_bytes[idx..payload_end].to_vec());
+                        }
+                    }
+                }
+            }
+            idx += 2 + length;
+        }
+    }
+    None
+}
+
+fn inject_exif(jpeg_bytes: &[u8], exif_segment: &[u8]) -> Vec<u8> {
+    if jpeg_bytes.len() < 2 || jpeg_bytes[0] != 0xFF || jpeg_bytes[1] != 0xD8 {
+        return jpeg_bytes.to_vec();
+    }
+
+    let mut result = Vec::with_capacity(jpeg_bytes.len() + exif_segment.len());
+    result.extend_from_slice(&[0xFF, 0xD8]); // SOI
+    result.extend_from_slice(exif_segment); // Exif (APP1) を挿入
+    result.extend_from_slice(&jpeg_bytes[2..]); // 残りの画像データ
+    result
 }
 
 fn draw_wrapped_text(
@@ -95,7 +140,9 @@ async fn compress_handler(mut payload: Multipart) -> impl Responder {
         return HttpResponse::BadRequest().body("No data");
     }
 
-    // 2. 画像デコード (PNG or JPG or TIFF などを自動で判別)
+    // 元画像から Exif（APP1 セグメント）をあらかじめ抽出しておく
+    let exif_data = extract_exif(&image_bytes);
+
     let Ok(mut img) = decode_image(&image_bytes) else {
         return HttpResponse::BadRequest().body("Decode error");
     };
@@ -128,9 +175,16 @@ async fn compress_handler(mut payload: Multipart) -> impl Responder {
         return HttpResponse::InternalServerError().body("Encode error");
     }
 
+    let mut final_bytes = buffer.into_inner();
+
+    // 抽出できた Exif があれば、再エンコード後の JPEG に再度埋め込む
+    if let Some(exif) = exif_data {
+        final_bytes = inject_exif(&final_bytes, &exif);
+    }
+
     HttpResponse::Ok()
         .content_type("image/jpeg")
-        .body(buffer.into_inner())
+        .body(final_bytes)
 }
 
 #[post("/compress_webp")]
